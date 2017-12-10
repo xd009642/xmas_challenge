@@ -3,10 +3,13 @@
 #include "LCD_DISCO_F469NI.h"
 #include "SD_DISCO_F469NI.h"
 #include "neopixel.h"
+#include "dotstar.h"
 #include "framebuffer.h"
 #include "SDFileSystem.h"
 #include "background.h"
 #include "gui.h"
+#include "display_settings.h"
+#include "motor_control.h"
 
 //Do I need to set the alt functions for the pins?
 LCD_DISCO_F469NI lcd;
@@ -20,6 +23,7 @@ static constexpr uint32_t SCREEN_HEIGHT = 480;
 // These are approximates just to give decent spacing
 static constexpr uint32_t BORDER_HEIGHT = 60;
 static constexpr uint32_t BORDER_WIDTH = 120;
+
 bool init_sd_card() {
     return sd.disk_initialize() == 0;
 }
@@ -37,65 +41,79 @@ void prepare_background()
 
 void launch_pong()
 {
-    lcd.DisplayStringAt(0, LINE(10), (uint8_t*)"PLAYING PONG", RIGHT_MODE);
+    lcd.DisplayStringAt(0, LINE(1), (uint8_t*)"PLAYING PONG", RIGHT_MODE);
 }
+
+void halt_motor()
+{
+    lcd.DisplayStringAt(0, LINE(10), (uint8_t*)"HALTING ", RIGHT_MODE);
+    motors::set_state(motors::state::stop);
+}
+
+
+void spin_up()
+{
+    lcd.DisplayStringAt(0, LINE(10), (uint8_t*)"SPINNING", RIGHT_MODE);
+    motors::set_state(motors::state::spin);
+}
+
 
 int main()
 {
     TS_StateTypeDef touch;
-    uint8_t text[30];
-    uint8_t status;
     lcd.SetTextColor(LCD_COLOR_WHITE);
     lcd.Clear(BACKGROUND_COLOUR);
     lcd.SetBackColor(BACKGROUND_COLOUR);
     BSP_LCD_SetFont(&Font24);
-    status = ts.Init(lcd.GetXSize(), lcd.GetYSize());
+    // not checking status
+    ts.Init(lcd.GetXSize(), lcd.GetYSize());
     prepare_background();
     // 0 means good, non-zero is error code. 
-    lcd.DisplayStringAt(0, LINE(5), (uint8_t *)"XMAS CHALLENGE", CENTER_MODE);
-  
-    render::framebuffer buffer(26, 26);
-    if(buffer.is_valid() == false)
+    lcd.DisplayStringAt(0, LINE(2), (uint8_t *)"XMAS CHALLENGE SPIN", CENTER_MODE);
+    render::framebuffer outer_buffer(OUTER_WIDTH, OUTER_HEIGHT);
+    render::framebuffer inner_buffer(INNER_WIDTH, INNER_HEIGHT);
+    ds::ring outer(outer_buffer, ds::outer); 
+    ds::ring inner(inner_buffer, ds::inner); 
+    inner_buffer.clear(ds::RED);
+    outer_buffer.clear(ds::BLUE);
+    for(int i=0; i<OUTER_WIDTH; i++)
     {
-        lcd.DisplayStringAt(0, LINE(15), (uint8_t*)"BUFFER NOT ALLOCATED", CENTER_MODE);
+        outer_buffer.pixel_at(i, 25) = ds::GREEN; 
+        outer_buffer.pixel_at(i, 26) = ds::GREEN; 
+        outer_buffer.pixel_at(i, 27) = ds::GREEN; 
     }
-    buffer.clear(0x00000000);
-    for(size_t i=0; i<26; i++) 
-    {
-        buffer.pixel_at(i,i)= 30;
-    }
-    buffer.fill_rect(5, 0, 2, 5, 0x0000FF00);
-    buffer.swap();
-    np::init_all();
-    
+    int outer_col = 0;
+    int inner_col = 0;
+    outer_buffer.swap();
+    inner_buffer.swap();
+    gui::interface ui(lcd, 3);
     // Assume 3 apps and hack out a button
-    gui::button btn;
-    btn.x = 330;
-    btn.y = 200;
-    btn.width = 150;
-    btn.height = 100;
-    btn.border = LCD_COLOR_GREEN;
-    btn.text_colour = LCD_COLOR_WHITE;
-    btn.text = "PONG";
-    btn.action = launch_pong;
-    btn.render(lcd);
-
-    size_t col = 0;
+    ui.get_button(0).text = "PONG";
+    ui.get_button(0).action = launch_pong;
+    ui.get_button(1).text = "Spin";
+    ui.get_button(1).action = spin_up;
+    ui.get_button(2).text = "Halt";
+    ui.get_button(2).action = halt_motor;
+    motors::set_lcd(&lcd);
+    motors::init(); 
     while(1)
     {
         ts.GetState(&touch);
-        btn.poll_event(touch);
-        t.start();
-        int bytes = np::render_segment(np::INNER_0, buffer.get_render_column(col), 26);
-        t.stop();
-        sprintf((char*)text, "Rendered %d bytes in %fs", bytes, t.read());
-        t.reset();
-        lcd.DisplayStringAt(0, LINE(15), text, LEFT_MODE);
-        buffer.pixel_at(col,col)+=20;
-        col++;
-        if(col==26) {
-            buffer.swap();
-            col = 0;
+        ui.render_all();
+        ui.update(touch);
+        outer.display(outer_col);
+    //    inner.display(inner_col);
+        inner_col++;
+        outer_col++;
+        if(outer_col == OUTER_WIDTH) {
+            outer_buffer.swap();
+            outer_col = 0;
         }
+        if(inner_col == INNER_WIDTH) {
+            inner_buffer.swap();
+            inner_col = 0;
+        }
+
+        motors::update();
     }
 }
